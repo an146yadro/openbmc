@@ -1,0 +1,13 @@
+[Unit]
+Description=Set fans to a default speed
+Wants=obmc-host-start-pre@%i.target
+Before=obmc-host-start-pre@%i.target
+Conflicts=obmc-chassis-poweroff@%i.target
+
+[Service]
+ExecStart={bindir}/fan-default-speed.sh
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=obmc-chassis-poweron@%i.target

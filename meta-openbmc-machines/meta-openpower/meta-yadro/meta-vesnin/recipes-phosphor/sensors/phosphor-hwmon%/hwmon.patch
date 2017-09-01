@@ -1,0 +1,116 @@
+diff --git a/mainloop.cpp b/mainloop.cpp
+index 486a175..2a1a519 100644
+--- a/mainloop.cpp
++++ b/mainloop.cpp
+@@ -328,7 +328,94 @@ void MainLoop::run()
+     /* If there are no sensors specified by labels, exit. */
+     if (0 == state.size())
+     {
+-        return;
++        //_hwmonRoot = _hwmonRoot + '/' + _instance;
++        //_instance = "device";
++        auto dir = _hwmonRoot + '/' + _instance + "/device";
++        sensors = std::make_unique<SensorSet>(dir);
++        for (auto& i : *sensors)
++        {
++            std::string label;
++
++            /*
++             * Check if the value of the MODE_<item><X> env variable for the sensor
++             * is "label", then read the sensor number from the <item><X>_label
++             * file. The name of the DBUS object would be the value of the env
++             * variable LABEL_<item><sensorNum>. If the MODE_<item><X> env variable
++             * does'nt exist, then the name of DBUS object is the value of the env
++             * variable LABEL_<item><X>.
++             */
++            auto mode = getEnv("MODE", i.first);
++            if (!mode.compare(hwmon::entry::label))
++            {
++                label = getIndirectLabelEnv(
++                    "LABEL", _hwmonRoot + '/' + _instance + "/device/", i.first);
++                if (label.empty())
++                {
++                    continue;
++                }
++            }
++            else
++            {
++                // Ignore inputs without a label.
++                label = getEnv("LABEL", i.first);
++                if (label.empty())
++                {
++                    continue;
++                }
++            }
++
++            Attributes attrs;
++            if (!getAttributes(i.first.first, attrs))
++            {
++                continue;
++            }
++
++            std::string objectPath{_root};
++            objectPath.append(1, '/');
++            objectPath.append(getNamespace(attrs));
++            objectPath.append(1, '/');
++            objectPath.append(label);
++
++            ObjectInfo info(&_bus, std::move(objectPath), Object());
++            auto valueInterface = addValue(i.first, _hwmonRoot, _instance, info);
++            if (!valueInterface)
++            {
++#ifdef REMOVE_ON_FAIL
++            continue; /* skip adding this sensor for now. */
++#else
++            exit(EXIT_FAILURE);
++#endif
++            }
++            auto sensorValue = valueInterface->value();
++            addThreshold<WarningObject>(i.first, sensorValue, info);
++            addThreshold<CriticalObject>(i.first, sensorValue, info);
++            //TODO openbmc/openbmc#1347
++            //     Handle application restarts to set/refresh fan speed values
++            auto target = addTarget<hwmon::FanSpeed>(
++                    i.first, _hwmonRoot, _instance, info);
++
++            if (target)
++            {
++                target->enable();
++            }
++
++            // All the interfaces have been created.  Go ahead
++            // and emit InterfacesAdded.
++            valueInterface->emit_object_added();
++
++            auto value = std::make_tuple(
++                             std::move(i.second),
++                             std::move(label),
++                             std::move(info));
++
++            state[std::move(i.first)] = std::move(value);
++        }
++    }
++
++    /* If there are no sensors specified by labels, exit. */
++    if (0 == state.size())
++    {
++         return;
+     }
+ 
+     {
+diff --git a/sysfs.cpp b/sysfs.cpp
+index efdba92..3d863ec 100644
+--- a/sysfs.cpp
++++ b/sysfs.cpp
+@@ -165,6 +165,11 @@ int readSysfsWithCallout(const std::string& root,
+     std::string fullPath = make_sysfs_path(instancePath,
+                                            type, id, sensor);
+ 
++    if (!fs::exists(fullPath))
++    {
++        fullPath = make_sysfs_path(instancePath / "device", type, id, sensor);
++    }
++
+     ifs.exceptions(std::ifstream::failbit
+                    | std::ifstream::badbit
+                    | std::ifstream::eofbit);

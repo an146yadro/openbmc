@@ -1,0 +1,255 @@
+diff --git a/arch/arm/boot/dts/Makefile b/arch/arm/boot/dts/Makefile
+index 6d6c9eb..74b99b7 100644
+--- a/arch/arm/boot/dts/Makefile
++++ b/arch/arm/boot/dts/Makefile
+@@ -988,6 +988,7 @@ dtb-$(CONFIG_ARCH_ASPEED) += aspeed-bmc-opp-palmetto.dtb \
+ 	aspeed-bmc-opp-firestone.dtb \
+ 	aspeed-bmc-opp-garrison.dtb \
+ 	aspeed-bmc-opp-witherspoon.dtb \
++	aspeed-bmc-opp-vesnin.dtb \
+ 	aspeed-bmc-opp-zaius.dtb \
+ 	aspeed-bmc-opp-lanyang.dtb \
+ 	aspeed-bmc-mellanox-msn.dtb \
+diff --git a/arch/arm/mach-aspeed/aspeed.c b/arch/arm/mach-aspeed/aspeed.c
+index a9e91d9..c9f8226 100644
+--- a/arch/arm/mach-aspeed/aspeed.c
++++ b/arch/arm/mach-aspeed/aspeed.c
+@@ -115,6 +115,15 @@ static void __init do_garrison_setup(void)
+ 	writel(0xFC0003FF, AST_IO(AST_BASE_LPC | 0x8C));
+ }
+ 
++static void __init do_vesnin_setup(void)
++{
++	do_common_setup();
++
++	/* Setup PNOR address mapping for 64M flash */
++	writel(0x30000C00, AST_IO(AST_BASE_LPC | 0x88));
++	writel(0xFC0003FF, AST_IO(AST_BASE_LPC | 0x8C));
++}
++
+ static void __init do_ast2500evb_setup(void)
+ {
+ 	/* Set strap to RGMII for dedicated PHY networking */
+@@ -258,6 +267,8 @@ static void __init aspeed_init_early(void)
+ 		do_firestone_setup();
+ 	if (of_machine_is_compatible("ibm,garrison-bmc"))
+ 		do_garrison_setup();
++	if (of_machine_is_compatible("yadro,vesnin-bmc"))
++		do_vesnin_setup();
+ 	if (of_machine_is_compatible("aspeed,ast2500-evb"))
+ 		do_ast2500evb_setup();
+ 	if (of_machine_is_compatible("ingrasys,zaius-bmc"))
+diff --git a/drivers/hwmon/w83795.c b/drivers/hwmon/w83795.c
+index 49276bb..0117b32 100644
+--- a/drivers/hwmon/w83795.c
++++ b/drivers/hwmon/w83795.c
+@@ -1887,6 +1887,8 @@ static void w83795_init_client(struct i2c_client *client)
+ 
+ 	data->clkin = clkin[(config >> 3) & 0x3];
+ 	dev_dbg(&client->dev, "clkin = %u kHz\n", data->clkin);
++	/* Enable VSEN9,VSEN10,VSEN11 */
++	w83795_write(client, W83795_REG_VOLT_CTRL2, 0xff);
+ }
+ 
+ static int w83795_get_device_id(struct i2c_client *client)
+@@ -2174,6 +2176,13 @@ static int w83795_probe(struct i2c_client *client,
+ 	data->has_fan = w83795_read(client, W83795_REG_FANIN_CTRL1)
+ 		      | (w83795_read(client, W83795_REG_FANIN_CTRL2) << 8);
+ 
++	/* VSEN11-9 not for 795adg */
++	if (data->chip_type == w83795adg) {
++		data->has_in &= 0xf8ff;
++	} else {
++		data->has_in = 0xffff;
++	}
++
+ 	/* Check which analog temperatures and extra voltages are present */
+ 	tmp = w83795_read(client, W83795_REG_TEMP_CTRL1);
+ 	if (tmp & 0x20)
+diff --git a/arch/arm/boot/dts/aspeed-bmc-opp-vesnin.dts b/arch/arm/boot/dts/aspeed-bmc-opp-vesnin.dts
+new file mode 100644
+index 0000000..0520e26
+--- /dev/null
++++ b/arch/arm/boot/dts/aspeed-bmc-opp-vesnin.dts
+@@ -0,0 +1,181 @@
++/dts-v1/;
++
++#include "aspeed-g4.dtsi"
++#include <dt-bindings/gpio/aspeed-gpio.h>
++
++/ {
++	model = "Vesnin BMC";
++	compatible = "yadro,vesnin-bmc", "aspeed,ast2400";
++
++	chosen {
++		stdout-path = &uart5;
++		bootargs = "console=ttyS4,115200 earlyprintk";
++	};
++
++	memory {
++		reg = <0x40000000 0x20000000>;
++	};
++
++	reserved-memory {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		ranges;
++
++		vga_memory: framebuffer@5f000000 {
++			no-map;
++			reg = <0x5f000000 0x01000000>; /* 16MB */
++		};
++	};
++
++		leds {
++				compatible = "gpio-leds";
++
++				heartbeat {
++						gpios = <&gpio ASPEED_GPIO(R, 4) GPIO_ACTIVE_LOW>;
++				};
++		};
++};
++
++&fmc {
++	status = "okay";
++	flash@0 {
++		status = "okay";
++		m25p,fast-read;
++#include "aspeed-bmc-opp-flash-layout.dtsi"
++	};
++};
++
++&spi {
++	status = "okay";
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_spi1_default>;
++
++	flash@0 {
++		status = "okay";
++		label = "pnor";
++		m25p,fast-read;
++	};
++};
++
++&mac0 {
++	status = "okay";
++
++	use-ncsi;
++	no-hw-checksum;
++
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_rmii1_default>;
++};
++
++
++&uart5 {
++	status = "okay";
++};
++
++&i2c0 {
++	status = "okay";
++
++	eeprom@50 {
++		compatible = "atmel,24c256";
++		reg = <0x50>;
++		pagesize = <64>;
++	};
++};
++
++&i2c1 {
++	status = "okay";
++
++	tmp75@49 {
++		compatible = "ti,tmp75";
++		reg = <0x49>;
++	};
++};
++
++&i2c2 {
++	status = "okay";
++};
++
++&i2c3 {
++	status = "okay";
++
++};
++
++&i2c4 {
++	status = "okay";
++
++	occ-hwmon@50 {
++		compatible = "ibm,p8-occ-hwmon";
++		reg = <0x50>;
++	};
++};
++
++&i2c5 {
++	status = "okay";
++
++	occ-hwmon@51 {
++		compatible = "ibm,p8-occ-hwmon";
++		reg = <0x51>;
++	};
++};
++
++&i2c6 {
++	status = "okay";
++
++	occ-hwmon@56 {
++		compatible = "ibm,p8-occ-hwmon";
++		reg = <0x56>;
++	};
++};
++
++&i2c7 {
++	status = "okay";
++
++	occ-hwmon@57 {
++		compatible = "ibm,p8-occ-hwmon";
++		reg = <0x57>;
++	};
++};
++
++&i2c9 {
++	status = "okay";
++};
++
++&i2c10 {
++	status = "okay";
++};
++
++&i2c11 {
++	status = "okay";
++
++	rtc@68 {
++		compatible = "dallas,ds3231";
++		reg = <0x68>;
++	};
++};
++
++&i2c12 {
++	status = "okay";
++
++	w83795g@2f {
++		compatible = "nuvoton,w83795g";
++		reg = <0x2f>;
++	};
++};
++
++&i2c13 {
++	status = "okay";
++};
++
++&gpio {
++	pin_gpio_h6 {
++		gpio-hog;
++		gpios = <ASPEED_GPIO(H, 6) GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "H6";
++	};
++
++};
++
++&vuart {
++	status = "okay";
++};
